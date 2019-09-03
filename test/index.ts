@@ -1,6 +1,7 @@
 import { assert } from 'chai';
 import * as Redis from 'ioredis';
 import { RedisRichStructure } from '../';
+import * as _ from 'lodash';
 
 interface Car {
     id?: number;
@@ -79,13 +80,13 @@ describe('RedisRichStructure', () => {
 
     it('should insert/get value', async () => {
         const { id } = await redisCars.insert(originalCars[0]);
-        const car = await redisCars.get(id!);
+        const car = await redisCars.findById(id!);
         assert.deepStrictEqual(car, originalCars[0]);
     });
 
     it('should insert/get optional value', async () => {
         const { id } = await redisCars.insert({});
-        const car = await redisCars.get(id!);
+        const car = await redisCars.findById(id!);
         assert.deepStrictEqual(car, { id });
     });
 
@@ -93,111 +94,128 @@ describe('RedisRichStructure', () => {
         const insertedCars = await redisCars.insertMany(originalCars);
         const ids = insertedCars.map(c => c.id);
         assert.deepStrictEqual(ids, [1, 2, 3]);
-        const cars = await redisCars.getMany(ids);
+        const cars = await redisCars.findByIds(ids);
         assert.deepStrictEqual(cars, originalCars);
     });
 
     it('should find by key', async () => {
         await redisCars.insertMany(originalCars);
 
-        assert.deepStrictEqual(await redisCars.find('type', 'dummy'), []);
+        assert.deepStrictEqual(await redisCars.findBy('type', 'dummy'), []);
 
-        const hoge1Cars = await redisCars.find('type', 'hoge1');
+        const hoge1Cars = await redisCars.findBy('type', 'hoge1');
         hoge1Cars.sort((a: Car, b: Car) => a.id! - b.id!);
         assert.deepStrictEqual(hoge1Cars, [originalCars[0], originalCars[2]]);
 
-        const weight100Cars = await redisCars.find('weight', 300);
+        const weight100Cars = await redisCars.findBy('weight', 300);
         assert.deepStrictEqual(weight100Cars, [originalCars[0]]);
 
-        const createdAtNow3Cars = await redisCars.find('createdAt', now3);
+        const createdAtNow3Cars = await redisCars.findBy('createdAt', now3);
         assert.deepStrictEqual(createdAtNow3Cars, [originalCars[2]]);
     });
 
     it('should find by range key', async () => {
         await redisCars.insertMany(originalCars);
         assert.deepStrictEqual(
-            await redisCars.findRange('weight', 50, 150),
+            await redisCars.findRangeBy('weight', 50, 150),
             []
         );
-        assert.deepStrictEqual(await redisCars.findRange('weight', 299, 301), [
-            originalCars[0],
-        ]);
-        assert.deepStrictEqual(await redisCars.findRange('weight', -50, 450), [
-            originalCars[1],
-            originalCars[0],
-        ]);
+        assert.deepStrictEqual(
+            await redisCars.findRangeBy('weight', 299, 301),
+            [originalCars[0]]
+        );
+        assert.deepStrictEqual(
+            await redisCars.findRangeBy('weight', -50, 450),
+            [originalCars[1], originalCars[0]]
+        );
     });
 
     it('should filter', async () => {
         await redisCars.insertMany(originalCars);
-        assert.deepStrictEqual(await redisCars.getFilteredList('filter1'), [
+        assert.deepStrictEqual(await redisCars.findByFilter('filter1'), [
             originalCars[0],
             originalCars[2],
         ]);
-        assert.deepStrictEqual(await redisCars.getFilteredList('filter2'), [
+        assert.deepStrictEqual(await redisCars.findByFilter('filter2'), [
             originalCars[0],
         ]);
-        assert.deepStrictEqual(await redisCars.getFilteredList('filter3'), [
+        assert.deepStrictEqual(await redisCars.findByFilter('filter3'), [
             originalCars[0],
             originalCars[2],
         ]);
-        assert.deepStrictEqual(await redisCars.getFilteredList('filter4'), []);
+        assert.deepStrictEqual(await redisCars.findByFilter('filter4'), []);
     });
 
     it('should delete element', async () => {
         await redisCars.insertMany(originalCars);
         assert.deepStrictEqual(
-            await redisCars.findRange('id', -1, 100),
+            await redisCars.findRangeBy('id', -1, 100),
             originalCars
         );
         await redisCars.remove(2);
         await redisCars.remove(2);
-        assert.deepStrictEqual(await redisCars.findRange('id', -1, 100), [
+        assert.deepStrictEqual(await redisCars.findRangeBy('id', -1, 100), [
             originalCars[0],
             originalCars[2],
         ]);
-        assert.deepStrictEqual(await redisCars.getMany([1, 2, 3]), [
+        assert.deepStrictEqual(await redisCars.findByIds([1, 2, 3]), [
             originalCars[0],
             originalCars[2],
         ]);
         await redisCars.removeMany([1, 2, 3]);
-        assert.deepStrictEqual(await redisCars.find('type', 'hoge1'), []);
+        assert.deepStrictEqual(await redisCars.findBy('type', 'hoge1'), []);
         assert.deepStrictEqual(
-            await redisCars.findRange('weight', -1, 100),
+            await redisCars.findRangeBy('weight', -1, 100),
             []
         );
         assert.deepStrictEqual(
-            await redisCars.findRange('createdAt', now1, now3),
+            await redisCars.findRangeBy('createdAt', now1, now3),
             []
         );
     });
 
     it('should insert many, delete many, get many, filter correctly', async () => {
         const carsWithoutId: Car[] = [];
-        for (let i = 0; i < 10000; i++) {
+        for (let i = 0; i < 100; i++) {
             carsWithoutId.push({
-                type: `hoge-${rand(0, 10)}`,
+                type: `hoge${rand(0, 10)}`,
                 weight: rand(100, 200),
                 createdAt: new Date(new Date().getTime() + rand(0, 100)),
             });
         }
-        const cars = await redisCars.insertMany(carsWithoutId);
+        let cars = await redisCars.insertMany(carsWithoutId);
         assert.sameDeepMembers(
-            await redisCars.find('type', 'hoge4'),
+            await redisCars.findBy('type', 'hoge4'),
             cars.filter(car => car.type === 'hoge4')
         );
         const removedIds: number[] = [];
-        for (let i = 0; i < 400; i++) removedIds.push(rand(0, 1000));
+        for (let i = 0; i < 20; i++) removedIds.push(rand(0, 100));
         await redisCars.removeMany(removedIds);
+        cars = cars.filter(car => !removedIds.includes(car.id));
         assert.sameDeepMembers(
-            await redisCars.find('type', 'hoge4'),
-            cars.filter(
-                car => car.type === 'hoge4' && !removedIds.includes(car.id)
+            await redisCars.findBy('type', 'hoge4'),
+            cars.filter(car => car.type === 'hoge4')
+        );
+
+        assert.deepEqual(
+            await redisCars.findByFilter('filter1'),
+            cars.filter((elem: Car) => elem.type === 'hoge1')
+        );
+        assert.deepEqual(
+            await redisCars.findByFilter('filter2'),
+            _.sortBy(
+                cars.filter(
+                    (elem: Car) => elem.type === 'hoge1' && elem.weight
+                ),
+                'weight'
             )
         );
-        assert.sameDeepMembers(
-            await redisCars.getFilteredList('filter1'),
-            cars.filter((elem: Car) => elem.type === 'hoge4')
+        assert.deepEqual(
+            await redisCars.findByFilter('filter3'),
+            _.sortBy(
+                cars.filter((elem: Car) => elem.type === 'hoge1'),
+                'createdAt'
+            )
         );
     });
 });
@@ -229,7 +247,7 @@ describe('performance', () => {
         },
         true
     );
-    const BULK_NUM = 10000;
+    const BULK_NUM = 5000;
 
     before(async () => {
         await redis.flushdb();
@@ -248,8 +266,17 @@ describe('performance', () => {
     });
 
     it('find many', async () => {
-        for (let i = 0; i < BULK_NUM; i ++) {
-            await redisCars.find('type', 'hoge1');
+        for (let i = 0; i < BULK_NUM; i++) {
+            await redisCars.findBy('type', 'hoge1');
+        }
+        for (let i = 0; i < BULK_NUM; i++) {
+            await redisCars.findBy('weight', 200);
+        }
+    });
+
+    it('find ids many', async () => {
+        for (let i = 0; i < BULK_NUM; i++) {
+            await redisCars.findIdsBy('type', 'hoge1');
         }
     });
 

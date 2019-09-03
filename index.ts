@@ -169,7 +169,7 @@ export class RedisRichStructure<T extends { id?: number | string }> {
     }
 
     async removeMany(ids: (number | string)[]) {
-        const elems = await this.getMany(ids);
+        const elems = await this.findByIds(ids);
         await this.redis.del(...ids.map(id => this.getKey(id)));
         await this.removeIndex(elems);
         await this.removeFilter(ids);
@@ -193,11 +193,11 @@ export class RedisRichStructure<T extends { id?: number | string }> {
         return elems;
     }
 
-    async get(id: number | string): Promise<T> {
-        return (await this.getMany([id]))[0];
+    async findById(id: number | string): Promise<T> {
+        return (await this.findByIds([id]))[0];
     }
 
-    async getMany(ids: (number | string)[]): Promise<T[]> {
+    async findByIds(ids: (number | string)[]): Promise<T[]> {
         if (!ids.length) return [];
         const jsonList: string[] = await this.redis.mget(
             ...ids.map(id => this.getKey(id))
@@ -205,34 +205,41 @@ export class RedisRichStructure<T extends { id?: number | string }> {
         return jsonList.filter(json => json).map(json => this.parseJSON(json));
     }
 
-    async find(key: string, value: any): Promise<T[]> {
-        let ids;
-        if (this.schema[key].type === 'string') {
-            ids = await this.redis.smembers(this.getStringIndexKey(key, value));
-            return await this.getMany(ids);
-        }
-        return await this.findRange(key, value, value);
+    async findBy(key: string, value: any): Promise<T[]> {
+        return this.findByIds(await this.findIdsBy(key, value));
     }
 
-    async findRange(
+    async findIdsBy(key: string, value: any): Promise<(number | string)[]> {
+        if (this.schema[key].type === 'string') {
+            return await this.redis.smembers(
+                this.getStringIndexKey(key, value)
+            );
+        }
+        return this.findIdsRangeBy(key, value, value);
+    }
+
+    async findRangeBy(
         key: string,
         min: number | Date,
         max: number | Date
     ): Promise<T[]> {
+        return this.findByIds(await this.findIdsRangeBy(key, min, max));
+    }
+
+    async findIdsRangeBy(
+        key: string,
+        min: number | Date,
+        max: number | Date
+    ): Promise<(number | string)[]> {
         if (this.schema[key].type === 'string') {
             throw new Error('string findRange is not supported');
         }
         if (typeof min !== 'number') min = min.getTime();
         if (typeof max !== 'number') max = max.getTime();
-        const ids = await this.redis.zrangebyscore(
-            this.getIndexKey(key),
-            min,
-            max
-        );
-        return await this.getMany(ids);
+        return this.redis.zrangebyscore(this.getIndexKey(key), min, max);
     }
 
-    async getFilteredList(
+    async findByFilter(
         filterName: string,
         min?: number | Date,
         max?: number | Date
@@ -253,6 +260,6 @@ export class RedisRichStructure<T extends { id?: number | string }> {
             );
         }
 
-        return await this.getMany(ids);
+        return await this.findByIds(ids);
     }
 }
