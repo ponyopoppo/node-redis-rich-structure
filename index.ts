@@ -1,29 +1,48 @@
 import * as Redis from 'ioredis';
 
 type SchemaType = 'string' | 'number' | 'Date';
-interface SchemaEntry<T> {
+interface SchemaEntry {
     type: SchemaType;
     index?: boolean;
 }
 
-type Schema<T> = { [key: string]: SchemaEntry<T> };
+type Schema<T> = { [Key in keyof T]: SchemaEntry };
 
 type Filter<T> = {
     [key: string]: {
-        orderKey: string;
-        condition: (elem: T) => void;
+        orderKey: keyof T;
+        condition: (elem: T) => boolean;
     };
 };
 
-export class RedisRichStructure<T extends { id?: number | string }> {
+type IdType = string | number;
+
+export class RedisRichStructure<
+    T extends { id?: IdType },
+    NewT = Omit<T, 'id'>
+> {
     private dateKeys: string[];
+    private schema: Schema<T> = {} as any;
     constructor(
         private redis: Redis.Redis,
         private collectionName: string,
-        private schema: Schema<T>,
+        defaultValue: T,
+        indexes: (keyof T)[],
         private filters: Filter<T>,
         private autoId: boolean
     ) {
+        for (let key of Object.keys(defaultValue)) {
+            const value = defaultValue[key];
+            const type =
+                typeof value === 'string'
+                    ? 'string'
+                    : typeof value === 'number'
+                    ? 'number'
+                    : 'Date';
+            this.schema[key] = { type };
+        }
+        for (let key of indexes) this.schema[key].index = true;
+
         this.dateKeys = Object.keys(this.schema).filter(
             key => this.schema[key].type === 'Date'
         );
@@ -33,7 +52,7 @@ export class RedisRichStructure<T extends { id?: number | string }> {
         return `idcnt::${this.collectionName}`;
     }
 
-    private getKey(id?: number | string) {
+    private getKey(id: IdType) {
         return `${this.collectionName}:${id}`;
     }
 
@@ -128,7 +147,7 @@ export class RedisRichStructure<T extends { id?: number | string }> {
                 const score =
                     typeof elem[orderKey] === 'number'
                         ? elem[orderKey]
-                        : elem[orderKey].getTime();
+                        : (elem[orderKey] as any).getTime();
                 args.push(score);
                 args.push(`${elem.id}`);
             }
@@ -136,7 +155,7 @@ export class RedisRichStructure<T extends { id?: number | string }> {
         }
     }
 
-    private async removeFilter(ids: (number | string)[]) {
+    private async removeFilter(ids: IdType[]) {
         if (!ids.length) return;
         for (let filterName of Object.keys(this.filters)) {
             const { orderKey } = this.filters[filterName];
@@ -160,30 +179,21 @@ export class RedisRichStructure<T extends { id?: number | string }> {
 
     // MARK: public
 
-    async insert(elem: T): Promise<T> {
+    async insert(elem: NewT): Promise<T> {
         return (await this.insertMany([elem]))[0];
     }
 
-    async remove(id: number | string) {
-        await this.removeMany([id]);
-    }
-
-    async removeMany(ids: (number | string)[]) {
-        const elems = await this.findByIds(ids);
-        await this.redis.del(...ids.map(id => this.getKey(id)));
-        await this.removeIndex(elems);
-        await this.removeFilter(ids);
-    }
-
-    async insertMany(_elems: T[]): Promise<T[]> {
-        const elems = [..._elems];
+    async insertMany(_elems: NewT[]): Promise<T[]> {
+        const elems: T[] = [..._elems] as any;
         let lastId = this.autoId
             ? await this.redis.incrby(this.getCntKey(), elems.length)
             : 0;
         const args = [];
         let curId = lastId - elems.length;
         for (let elem of elems) {
-            elem.id = ++curId;
+            if (this.autoId) elem.id = ++curId;
+            else if (elem.id == undefined)
+                throw new Error('Element id is necessary');
             args.push(this.getKey(elem.id), JSON.stringify(elem));
         }
 
@@ -193,11 +203,22 @@ export class RedisRichStructure<T extends { id?: number | string }> {
         return elems;
     }
 
-    async findById(id: number | string): Promise<T> {
+    async remove(id: IdType) {
+        await this.removeMany([id]);
+    }
+
+    async removeMany(ids: IdType[]) {
+        const elems = await this.findByIds(ids);
+        await this.redis.del(...ids.map(id => this.getKey(id)));
+        await this.removeIndex(elems);
+        await this.removeFilter(ids);
+    }
+
+    async findById(id: IdType): Promise<T> {
         return (await this.findByIds([id]))[0];
     }
 
-    async findByIds(ids: (number | string)[]): Promise<T[]> {
+    async findByIds(ids: IdType[]): Promise<T[]> {
         if (!ids.length) return [];
         const jsonList: string[] = await this.redis.mget(
             ...ids.map(id => this.getKey(id))
@@ -210,6 +231,7 @@ export class RedisRichStructure<T extends { id?: number | string }> {
     }
 
     async findIdsBy(key: string, value: any): Promise<(number | string)[]> {
+        if (!this.schema[key].index) throw new Error(`${key} is not indexed`);
         if (this.schema[key].type === 'string') {
             return await this.redis.smembers(
                 this.getStringIndexKey(key, value)
@@ -231,6 +253,7 @@ export class RedisRichStructure<T extends { id?: number | string }> {
         min: number | Date,
         max: number | Date
     ): Promise<(number | string)[]> {
+        if (!this.schema[key].index) throw new Error(`${key} is not indexed`);
         if (this.schema[key].type === 'string') {
             throw new Error('string findRange is not supported');
         }
@@ -246,6 +269,8 @@ export class RedisRichStructure<T extends { id?: number | string }> {
     ) {
         let ids;
         const orderKey = this.filters[filterName].orderKey;
+        if (!this.schema[orderKey].index)
+            throw new Error(`${orderKey} is not indexed`);
         if (this.schema[orderKey].type === 'string') {
             ids = await this.redis.smembers(this.getFilterKey(filterName));
         } else if (min === undefined || max === undefined) {

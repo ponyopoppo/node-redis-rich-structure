@@ -12,24 +12,16 @@ interface Car {
 
 const redis = new Redis();
 describe('RedisRichStructure', () => {
-    const redisCars = new RedisRichStructure<any>(
+    const redisCars = new RedisRichStructure<Car>(
         redis,
         'cars',
         {
-            id: { type: 'number', index: true },
-            type: {
-                type: 'string',
-                index: true,
-            },
-            weight: {
-                type: 'number',
-                index: true,
-            },
-            createdAt: {
-                type: 'Date',
-                index: true,
-            },
+            id: 0,
+            type: '',
+            weight: 0,
+            createdAt: new Date(),
         },
+        ['id', 'type', 'weight', 'createdAt'],
         {
             filter1: {
                 orderKey: 'id',
@@ -37,17 +29,18 @@ describe('RedisRichStructure', () => {
             },
             filter2: {
                 orderKey: 'weight',
-                condition: (elem: Car) => elem.type === 'hoge1' && elem.weight,
+                condition: (elem: Car) =>
+                    elem.type === 'hoge1' && !!elem.weight,
             },
             filter3: {
                 orderKey: 'createdAt',
                 condition: (elem: Car) =>
-                    elem.type === 'hoge1' && elem.createdAt,
+                    elem.type === 'hoge1' && !!elem.createdAt,
             },
             filter4: {
                 orderKey: 'createdAt',
                 condition: (elem: Car) =>
-                    elem.type === 'hoge2' && elem.createdAt,
+                    elem.type === 'hoge2' && !!elem.createdAt,
             },
         },
         true
@@ -92,7 +85,7 @@ describe('RedisRichStructure', () => {
 
     it('should insert/get multiple values', async () => {
         const insertedCars = await redisCars.insertMany(originalCars);
-        const ids = insertedCars.map(c => c.id);
+        const ids: number[] = insertedCars.map(c => c.id!);
         assert.deepStrictEqual(ids, [1, 2, 3]);
         const cars = await redisCars.findByIds(ids);
         assert.deepStrictEqual(cars, originalCars);
@@ -191,7 +184,7 @@ describe('RedisRichStructure', () => {
         const removedIds: number[] = [];
         for (let i = 0; i < 20; i++) removedIds.push(rand(0, 100));
         await redisCars.removeMany(removedIds);
-        cars = cars.filter(car => !removedIds.includes(car.id));
+        cars = cars.filter(car => !removedIds.includes(car.id!));
         assert.sameDeepMembers(
             await redisCars.findBy('type', 'hoge4'),
             cars.filter(car => car.type === 'hoge4')
@@ -221,28 +214,21 @@ describe('RedisRichStructure', () => {
 });
 
 describe('performance', () => {
-    const redisCars = new RedisRichStructure<any>(
+    const redisCars = new RedisRichStructure<Car>(
         redis,
         'cars',
         {
-            id: { type: 'number', index: true },
-            type: {
-                type: 'string',
-                index: true,
-            },
-            weight: {
-                type: 'number',
-                index: true,
-            },
-            createdAt: {
-                type: 'Date',
-                index: true,
-            },
+            id: 0,
+            type: '',
+            weight: 0,
+            createdAt: new Date(),
         },
+        ['id', 'type', 'weight', 'createdAt'],
         {
             filter2: {
                 orderKey: 'weight',
-                condition: (elem: Car) => elem.type === 'hoge1' && elem.weight,
+                condition: (elem: Car) =>
+                    elem.type === 'hoge1' && !!elem.weight,
             },
         },
         true
