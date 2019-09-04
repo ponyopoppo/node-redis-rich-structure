@@ -56,11 +56,11 @@ export class RedisRichStructure<
         return `${this.collectionName}:${id}`;
     }
 
-    private getIndexKey(key: string) {
+    private getIndexKey(key: keyof T) {
         return `index::${key}`;
     }
 
-    private getStringIndexKey(key: string, value: string) {
+    private getStringIndexKey(key: keyof T, value: string) {
         return `index::${key}:${value}`;
     }
 
@@ -69,13 +69,14 @@ export class RedisRichStructure<
     }
 
     private async insertIndex(_elems: T[]) {
-        for (let key of Object.keys(this.schema)) {
+        for (let _key of Object.keys(this.schema)) {
+            const key = _key as keyof T;
             if (!this.schema[key].index) continue;
             const elems = _elems.filter(elem => elem[key] !== undefined);
             if (!elems.length) continue;
             if (this.schema[key].type === 'string') {
                 for (let elem of elems) {
-                    const value: string = elem[key];
+                    const value: string = elem[key] as any;
                     await this.redis.sadd(
                         this.getStringIndexKey(key, value),
                         elem.id
@@ -90,7 +91,7 @@ export class RedisRichStructure<
             } else if (this.schema[key].type === 'Date') {
                 const args: string[] = [];
                 for (let elem of elems) {
-                    args.push(`${elem[key].getTime()}`, `${elem.id}`);
+                    args.push(`${(elem[key] as any).getTime()}`, `${elem.id}`);
                 }
                 await this.redis.zadd(this.getIndexKey(key), ...args);
             }
@@ -98,13 +99,14 @@ export class RedisRichStructure<
     }
 
     private async removeIndex(_elems: T[]) {
-        for (let key of Object.keys(this.schema)) {
+        for (let _key of Object.keys(this.schema)) {
+            const key = _key as keyof T;
             if (!this.schema[key].index) continue;
             const elems = _elems.filter(elem => elem[key] !== undefined);
             if (!elems.length) continue;
             if (this.schema[key].type === 'string') {
                 for (let elem of elems) {
-                    const value: string = elem[key];
+                    const value: string = elem[key] as any;
                     await this.redis.srem(
                         this.getStringIndexKey(key, value),
                         elem.id
@@ -226,11 +228,11 @@ export class RedisRichStructure<
         return jsonList.filter(json => json).map(json => this.parseJSON(json));
     }
 
-    async findBy(key: string, value: any): Promise<T[]> {
+    async findBy(key: keyof T, value: any): Promise<T[]> {
         return this.findByIds(await this.findIdsBy(key, value));
     }
 
-    async findIdsBy(key: string, value: any): Promise<(number | string)[]> {
+    async findIdsBy(key: keyof T, value: any): Promise<IdType[]> {
         if (!this.schema[key].index) throw new Error(`${key} is not indexed`);
         if (this.schema[key].type === 'string') {
             return await this.redis.smembers(
@@ -241,7 +243,7 @@ export class RedisRichStructure<
     }
 
     async findRangeBy(
-        key: string,
+        key: keyof T,
         min: number | Date,
         max: number | Date
     ): Promise<T[]> {
@@ -249,7 +251,7 @@ export class RedisRichStructure<
     }
 
     async findIdsRangeBy(
-        key: string,
+        key: keyof T,
         min: number | Date,
         max: number | Date
     ): Promise<(number | string)[]> {
