@@ -195,10 +195,30 @@ describe('RedisRichStructure', () => {
             cars.filter((elem: Car) => elem.type === 'hoge1')
         );
         assert.deepEqual(
+            await redisCars.findRangeByFilter('filter1', 10, 20),
+            cars.filter(
+                (elem: Car) =>
+                    elem.type === 'hoge1' && elem.id! >= 10 && elem.id! <= 20
+            )
+        );
+        assert.deepEqual(
             await redisCars.findByFilter('filter2'),
             _.sortBy(
                 cars.filter(
                     (elem: Car) => elem.type === 'hoge1' && elem.weight
+                ),
+                'weight'
+            )
+        );
+        assert.deepEqual(
+            await redisCars.findRangeByFilter('filter2', 150, 180),
+            _.sortBy(
+                cars.filter(
+                    (elem: Car) =>
+                        elem.type === 'hoge1' &&
+                        elem.weight &&
+                        elem.weight >= 150 &&
+                        elem.weight <= 180
                 ),
                 'weight'
             )

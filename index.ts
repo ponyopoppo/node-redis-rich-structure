@@ -264,10 +264,16 @@ export class RedisRichStructure<
         return this.redis.zrangebyscore(this.getIndexKey(key), min, max);
     }
 
-    async findByFilter(
+    async findByFilter(filterName: string) {
+        return this.findByIds(
+            await this.redis.zrange(this.getFilterKey(filterName), 0, -1)
+        );
+    }
+
+    async findRangeByFilter(
         filterName: string,
-        min?: number | Date,
-        max?: number | Date
+        min: number | Date,
+        max: number | Date
     ) {
         let ids;
         const orderKey = this.filters[filterName].orderKey;
@@ -275,8 +281,6 @@ export class RedisRichStructure<
             throw new Error(`${orderKey} is not indexed`);
         if (this.schema[orderKey].type === 'string') {
             ids = await this.redis.smembers(this.getFilterKey(filterName));
-        } else if (min === undefined || max === undefined) {
-            ids = await this.redis.zrange(this.getFilterKey(filterName), 0, -1);
         } else {
             if (typeof min !== 'number') min = min.getTime();
             if (typeof max !== 'number') max = max.getTime();
