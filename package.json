@@ -1,7 +1,8 @@
 {
   "name": "node-redis-rich-structure",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "dist/index.js",
+  "private": false,
   "license": "MIT",
   "dependencies": {
     "@types/chai": "^4.2.0",
@@ -13,5 +14,10 @@
     "lodash": "^4.17.15",
     "mocha": "^6.2.0",
     "ts-mocha": "^6.0.0"
+  },
+  "scripts": {
+    "test": "ts-mocha test/index.ts",
+    "build": "tsc",
+    "prepublishOnly": "yarn build"
   }
 }
