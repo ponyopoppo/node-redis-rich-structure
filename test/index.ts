@@ -1,6 +1,6 @@
 import { assert } from 'chai';
 import * as Redis from 'ioredis';
-import { RedisRichStructure } from '../';
+import { RedisRichStructure } from '../index';
 import * as _ from 'lodash';
 
 interface Car {
@@ -42,15 +42,14 @@ describe('RedisRichStructure', () => {
                 condition: (elem: Car) =>
                     elem.type === 'hoge2' && !!elem.createdAt,
             },
-        },
-        true
+        }
     );
 
     const now1 = new Date();
     const now3 = new Date(new Date().getTime() + 10000);
     const originalCars = [
         {
-            id: 1,
+            id: 100,
             type: 'hoge1',
             weight: 300,
             createdAt: now1,
@@ -74,7 +73,51 @@ describe('RedisRichStructure', () => {
     it('should insert/get value', async () => {
         const { id } = await redisCars.insert(originalCars[0]);
         const car = await redisCars.findById(id!);
-        assert.deepStrictEqual(car, originalCars[0]);
+        assert.deepStrictEqual(car, { ...originalCars[0], id });
+    });
+
+    it('should insert/delete/get value', async () => {
+        const { id } = await redisCars.insert(originalCars[0]);
+        assert.deepStrictEqual(await redisCars.findById(id!), {
+            ...originalCars[0],
+            id,
+        });
+        await redisCars.remove(id!);
+        assert.deepStrictEqual(await redisCars.findById(id!), undefined);
+        await redisCars.insert(
+            {
+                ...originalCars[0],
+                id,
+            },
+            false
+        );
+        assert.deepStrictEqual(await redisCars.findById(id!), {
+            ...originalCars[0],
+            id,
+        });
+    });
+
+    it('should upsert value', async () => {
+        const { id } = await redisCars.insert(originalCars[0]);
+        assert.deepStrictEqual(await redisCars.findById(id!), {
+            ...originalCars[0],
+            id,
+        });
+        await redisCars.upsert({
+            ...originalCars[0],
+            id,
+            weight: 222,
+        });
+        await redisCars.upsert(originalCars[1]);
+        assert.deepStrictEqual(await redisCars.findById(id!), {
+            ...originalCars[0],
+            id,
+            weight: 222,
+        });
+        assert.deepStrictEqual(
+            await redisCars.findById(originalCars[1].id),
+            originalCars[1]
+        );
     });
 
     it('should insert/get optional value', async () => {
@@ -250,8 +293,7 @@ describe('performance', () => {
                 condition: (elem: Car) =>
                     elem.type === 'hoge1' && !!elem.weight,
             },
-        },
-        true
+        }
     );
     const BULK_NUM = 5000;
 

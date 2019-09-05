@@ -19,7 +19,7 @@ type IdType = string | number;
 
 export class RedisRichStructure<
     T extends { id?: IdType },
-    NewT = Omit<T, 'id'>
+    NewT = Omit<T, 'id'> & { id?: IdType }
 > {
     private dateKeys: string[];
     private schema: Schema<T> = {} as any;
@@ -28,8 +28,7 @@ export class RedisRichStructure<
         private collectionName: string,
         defaultValue: T,
         indexes: (keyof T)[],
-        private filters: Filter<T>,
-        private autoId: boolean
+        private filters: Filter<T>
     ) {
         for (let key of Object.keys(defaultValue)) {
             const value = defaultValue[key];
@@ -46,6 +45,13 @@ export class RedisRichStructure<
         this.dateKeys = Object.keys(this.schema).filter(
             key => this.schema[key].type === 'Date'
         );
+    }
+
+    private clone(array: any[]) {
+        for (let i = 0; i < array.length; i++) {
+            array[i] = { ...array[i] };
+        }
+        return [...array];
     }
 
     private getCntKey() {
@@ -76,6 +82,7 @@ export class RedisRichStructure<
             if (!elems.length) continue;
             if (this.schema[key].type === 'string') {
                 for (let elem of elems) {
+                    if (elem[key] === undefined) continue;
                     const value: string = elem[key] as any;
                     await this.redis.sadd(
                         this.getStringIndexKey(key, value),
@@ -85,14 +92,18 @@ export class RedisRichStructure<
             } else if (this.schema[key].type === 'number') {
                 const args: string[] = [];
                 for (let elem of elems) {
+                    if (elem[key] === undefined) continue;
                     args.push(`${elem[key]}`, `${elem.id}`);
                 }
+                if (!args.length) continue;
                 await this.redis.zadd(this.getIndexKey(key), ...args);
             } else if (this.schema[key].type === 'Date') {
                 const args: string[] = [];
                 for (let elem of elems) {
+                    if (elem[key] === undefined) continue;
                     args.push(`${(elem[key] as any).getTime()}`, `${elem.id}`);
                 }
+                if (!args.length) continue;
                 await this.redis.zadd(this.getIndexKey(key), ...args);
             }
         }
@@ -181,20 +192,20 @@ export class RedisRichStructure<
 
     // MARK: public
 
-    async insert(elem: NewT): Promise<T> {
-        return (await this.insertMany([elem]))[0];
+    async insert(elem: NewT, autoIncId: boolean = true): Promise<T> {
+        return (await this.insertMany([elem], autoIncId))[0];
     }
 
-    async insertMany(_elems: NewT[]): Promise<T[]> {
-        const elems: T[] = [..._elems] as any;
-        let lastId = this.autoId
+    async insertMany(_elems: NewT[], autoIncId: boolean = true): Promise<T[]> {
+        const elems: T[] = this.clone(_elems) as any;
+        let lastId = autoIncId
             ? await this.redis.incrby(this.getCntKey(), elems.length)
             : 0;
         const args = [];
         let curId = lastId - elems.length;
         for (let elem of elems) {
-            if (this.autoId) elem.id = ++curId;
-            else if (elem.id == undefined)
+            if (autoIncId) elem.id = ++curId;
+            else if (elem.id === undefined)
                 throw new Error('Element id is necessary');
             args.push(this.getKey(elem.id), JSON.stringify(elem));
         }
@@ -214,6 +225,15 @@ export class RedisRichStructure<
         await this.redis.del(...ids.map(id => this.getKey(id)));
         await this.removeIndex(elems);
         await this.removeFilter(ids);
+    }
+
+    async upsert(elem: T) {
+        return (await this.upsertMany([elem]))[0];
+    }
+
+    async upsertMany(elems: T[]) {
+        await this.removeMany(elems.map(elem => elem.id!));
+        return this.insertMany(elems as any[], false);
     }
 
     async findById(id: IdType): Promise<T> {
