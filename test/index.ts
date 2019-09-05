@@ -1,6 +1,6 @@
 import { assert } from 'chai';
 import * as Redis from 'ioredis';
-import { RedisRichStructure } from '../index';
+import { RedisRichStructure } from '../';
 import * as _ from 'lodash';
 import * as mysql from 'promise-mysql';
 
@@ -278,7 +278,8 @@ describe('RedisRichStructure', () => {
 });
 
 const BULK_NUM = 500;
-describe('performance', () => {
+describe('performance', function() {
+    this.timeout(1000000);
     const redisCars = new RedisRichStructure<Car>(
         redis,
         'cars',
@@ -303,6 +304,18 @@ describe('performance', () => {
     });
 
     it('should insert many', async () => {
+        const cars: Car[] = [];
+        for (let i = 0; i < BULK_NUM; i++) {
+            cars.push({
+                type: `hoge-${rand(0, 10)}`,
+                weight: rand(100, 200),
+                createdAt: new Date(new Date().getTime() + rand(0, 100)),
+            });
+        }
+        await redisCars.insertMany(cars);
+    });
+
+    it('should insert one by one', async () => {
         for (let i = 0; i < BULK_NUM; i++) {
             await redisCars.insert({
                 type: `hoge-${rand(0, 10)}`,
