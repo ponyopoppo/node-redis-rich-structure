@@ -254,8 +254,7 @@ export class RedisRichStructure<
                 throw new Error('Element id is necessary');
             args.push(this.getKey(elem.id), JSON.stringify(elem));
         }
-
-        await this.redis.mset(args);
+        await chunkRun(args, 2, chunk => this.redis.mset(...chunk));        
         await this.insertIndex(elems);
         await this.insertFilter(elems);
         return elems;
