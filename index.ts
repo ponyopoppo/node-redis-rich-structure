@@ -17,6 +17,42 @@ type Filter<T> = {
 
 type IdType = string | number;
 
+const CHUNK_SIZE = 1000;
+
+async function chunkRun<Type>(
+    args: Type[],
+    atomicSize: number,
+    func: (chunk: Type[]) => Promise<any>
+) {
+    let chunk: Type[] = [];
+    for (let arg of args) {
+        chunk.push(arg);
+        if (chunk.length > CHUNK_SIZE && chunk.length % atomicSize === 0) {
+            await func(chunk);
+            chunk = [];
+        }
+    }
+    if (chunk.length > 0) await func(chunk);
+}
+
+async function chunkRunAndReturn<Type, Ret>(
+    args: Type[],
+    atomicSize: number,
+    func: (chunk: Type[]) => Promise<Ret[]>
+) {
+    let chunk: Type[] = [];
+    const ret: Ret[] = [];
+    for (let arg of args) {
+        chunk.push(arg);
+        if (chunk.length > CHUNK_SIZE && chunk.length % atomicSize === 0) {
+            ret.push(...(await func(chunk)));
+            chunk = [];
+        }
+    }
+    if (chunk.length > 0) ret.push(...(await func(chunk)));
+    return ret;
+}
+
 export class RedisRichStructure<
     T extends { id?: IdType },
     NewT = Omit<T, 'id'> & { id?: IdType }
@@ -63,15 +99,15 @@ export class RedisRichStructure<
     }
 
     private getIndexKey(key: keyof T) {
-        return `index::${key}`;
+        return `index::${this.collectionName}:${key}`;
     }
 
     private getStringIndexKey(key: keyof T, value: string) {
-        return `index::${key}:${value}`;
+        return `index::${this.collectionName}:${key}:${value}`;
     }
 
     private getFilterKey(filterName: string) {
-        return `filter::${filterName}`;
+        return `filter::${this.collectionName}:${filterName}`;
     }
 
     private async insertIndex(_elems: T[]) {
@@ -95,16 +131,18 @@ export class RedisRichStructure<
                     if (elem[key] === undefined) continue;
                     args.push(`${elem[key]}`, `${elem.id}`);
                 }
-                if (!args.length) continue;
-                await this.redis.zadd(this.getIndexKey(key), ...args);
+                await chunkRun(args, 2, chunk =>
+                    this.redis.zadd(this.getIndexKey(key), ...chunk)
+                );
             } else if (this.schema[key].type === 'Date') {
                 const args: string[] = [];
                 for (let elem of elems) {
                     if (elem[key] === undefined) continue;
                     args.push(`${(elem[key] as any).getTime()}`, `${elem.id}`);
                 }
-                if (!args.length) continue;
-                await this.redis.zadd(this.getIndexKey(key), ...args);
+                await chunkRun(args, 2, chunk =>
+                    this.redis.zadd(this.getIndexKey(key), ...chunk)
+                );
             }
         }
     }
@@ -128,13 +166,17 @@ export class RedisRichStructure<
                 for (let elem of elems) {
                     args.push(`${elem.id}`);
                 }
-                await this.redis.zrem(this.getIndexKey(key), ...args);
+                await chunkRun(args, 1, chunk =>
+                    this.redis.zrem(this.getIndexKey(key), ...chunk)
+                );
             } else if (this.schema[key].type === 'Date') {
                 const args: string[] = [];
                 for (let elem of elems) {
                     args.push(`${elem.id}`);
                 }
-                await this.redis.zrem(this.getIndexKey(key), ...args);
+                await chunkRun(args, 1, chunk =>
+                    this.redis.zrem(this.getIndexKey(key), ...chunk)
+                );
             }
         }
     }
@@ -145,9 +187,8 @@ export class RedisRichStructure<
             const elems = _elems.filter(condition);
             if (!elems.length) continue;
             if (!orderKey) {
-                await this.redis.sadd(
-                    this.getFilterKey(filterName),
-                    ...elems.map(e => e.id)
+                await chunkRun(elems.map(e => e.id), 1, chunk =>
+                    this.redis.sadd(this.getFilterKey(filterName), ...chunk)
                 );
                 continue;
             }
@@ -155,16 +196,17 @@ export class RedisRichStructure<
                 throw Error('string orderKey of filter is not supported');
             }
 
-            let args: string[] = [];
+            const args: string[] = [];
             for (let elem of elems) {
                 const score =
                     typeof elem[orderKey] === 'number'
                         ? elem[orderKey]
                         : (elem[orderKey] as any).getTime();
-                args.push(score);
-                args.push(`${elem.id}`);
+                args.push(score, `${elem.id}`);
             }
-            await this.redis.zadd(this.getFilterKey(filterName), ...args);
+            await chunkRun(args, 2, chunk =>
+                this.redis.zadd(this.getFilterKey(filterName), ...chunk)
+            );
         }
     }
 
@@ -174,11 +216,14 @@ export class RedisRichStructure<
             const { orderKey } = this.filters[filterName];
 
             if (!orderKey) {
-                await this.redis.srem(this.getFilterKey(filterName), ...ids);
+                await chunkRun(ids, 1, chunk =>
+                    this.redis.srem(this.getFilterKey(filterName), ...chunk)
+                );
                 continue;
             }
-
-            await this.redis.zrem(this.getFilterKey(filterName), ...ids);
+            await chunkRun(ids, 1, chunk =>
+                this.redis.zrem(this.getFilterKey(filterName), ...chunk)
+            );
         }
     }
 
@@ -201,7 +246,7 @@ export class RedisRichStructure<
         let lastId = autoIncId
             ? await this.redis.incrby(this.getCntKey(), elems.length)
             : 0;
-        const args = [];
+        const args: string[] = [];
         let curId = lastId - elems.length;
         for (let elem of elems) {
             if (autoIncId) elem.id = ++curId;
@@ -222,7 +267,9 @@ export class RedisRichStructure<
 
     async removeMany(ids: IdType[]) {
         const elems = await this.findByIds(ids);
-        await this.redis.del(...ids.map(id => this.getKey(id)));
+        await chunkRun(ids.map(id => this.getKey(id)), 1, chunk =>
+            this.redis.del(...chunk)
+        );
         await this.removeIndex(elems);
         await this.removeFilter(ids);
     }
@@ -242,9 +289,13 @@ export class RedisRichStructure<
 
     async findByIds(ids: IdType[]): Promise<T[]> {
         if (!ids.length) return [];
-        const jsonList: string[] = await this.redis.mget(
-            ...ids.map(id => this.getKey(id))
+
+        const jsonList: string[] = await chunkRunAndReturn(
+            ids.map(id => this.getKey(id)),
+            1,
+            chunk => this.redis.mget(...chunk)
         );
+
         return jsonList.filter(json => json).map(json => this.parseJSON(json));
     }
 
