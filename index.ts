@@ -122,14 +122,14 @@ export class RedisRichStructure<
                     const value: string = elem[key] as any;
                     await this.redis.sadd(
                         this.getStringIndexKey(key, value),
-                        elem.id
+                        JSON.stringify(elem)
                     );
                 }
             } else if (this.schema[key].type === 'number') {
                 const args: string[] = [];
                 for (let elem of elems) {
                     if (elem[key] === undefined) continue;
-                    args.push(`${elem[key]}`, `${elem.id}`);
+                    args.push(`${elem[key]}`, JSON.stringify(elem));
                 }
                 await chunkRun(args, 2, chunk =>
                     this.redis.zadd(this.getIndexKey(key), ...chunk)
@@ -138,7 +138,10 @@ export class RedisRichStructure<
                 const args: string[] = [];
                 for (let elem of elems) {
                     if (elem[key] === undefined) continue;
-                    args.push(`${(elem[key] as any).getTime()}`, `${elem.id}`);
+                    args.push(
+                        `${(elem[key] as any).getTime()}`,
+                        JSON.stringify(elem)
+                    );
                 }
                 await chunkRun(args, 2, chunk =>
                     this.redis.zadd(this.getIndexKey(key), ...chunk)
@@ -158,13 +161,13 @@ export class RedisRichStructure<
                     const value: string = elem[key] as any;
                     await this.redis.srem(
                         this.getStringIndexKey(key, value),
-                        elem.id
+                        JSON.stringify(elem)
                     );
                 }
             } else if (this.schema[key].type === 'number') {
                 const args: string[] = [];
                 for (let elem of elems) {
-                    args.push(`${elem.id}`);
+                    args.push(JSON.stringify(elem));
                 }
                 await chunkRun(args, 1, chunk =>
                     this.redis.zrem(this.getIndexKey(key), ...chunk)
@@ -172,7 +175,7 @@ export class RedisRichStructure<
             } else if (this.schema[key].type === 'Date') {
                 const args: string[] = [];
                 for (let elem of elems) {
-                    args.push(`${elem.id}`);
+                    args.push(JSON.stringify(elem));
                 }
                 await chunkRun(args, 1, chunk =>
                     this.redis.zrem(this.getIndexKey(key), ...chunk)
@@ -227,13 +230,13 @@ export class RedisRichStructure<
         }
     }
 
-    private parseJSON(json: string) {
+    private parseJSON = (json: string) => {
         const elem = JSON.parse(json);
         for (let key of this.dateKeys) {
             if (elem[key]) elem[key] = new Date(elem[key]);
         }
         return elem;
-    }
+    };
 
     // MARK: public
 
@@ -254,7 +257,7 @@ export class RedisRichStructure<
                 throw new Error('Element id is necessary');
             args.push(this.getKey(elem.id), JSON.stringify(elem));
         }
-        await chunkRun(args, 2, chunk => this.redis.mset(...chunk));        
+        await chunkRun(args, 2, chunk => this.redis.mset(...chunk));
         await this.insertIndex(elems);
         await this.insertFilter(elems);
         return elems;
@@ -288,28 +291,26 @@ export class RedisRichStructure<
 
     async findByIds(ids: IdType[]): Promise<T[]> {
         if (!ids.length) return [];
-
         const jsonList: string[] = await chunkRunAndReturn(
             ids.map(id => this.getKey(id)),
             1,
             chunk => this.redis.mget(...chunk)
         );
-
         return jsonList.filter(json => json).map(json => this.parseJSON(json));
     }
 
     async findBy(key: keyof T, value: any): Promise<T[]> {
-        return this.findByIds(await this.findIdsBy(key, value));
+        if (!this.schema[key].index) throw new Error(`${key} is not indexed`);
+        if (this.schema[key].type === 'string') {
+            return (await this.redis.smembers(
+                this.getStringIndexKey(key, value)
+            )).map(this.parseJSON);
+        }
+        return this.findRangeBy(key, value, value);
     }
 
     async findIdsBy(key: keyof T, value: any): Promise<IdType[]> {
-        if (!this.schema[key].index) throw new Error(`${key} is not indexed`);
-        if (this.schema[key].type === 'string') {
-            return await this.redis.smembers(
-                this.getStringIndexKey(key, value)
-            );
-        }
-        return this.findIdsRangeBy(key, value, value);
+        return (await this.findBy(key, value)).map(elem => elem.id!);
     }
 
     async findRangeBy(
@@ -317,21 +318,25 @@ export class RedisRichStructure<
         min: number | Date,
         max: number | Date
     ): Promise<T[]> {
-        return this.findByIds(await this.findIdsRangeBy(key, min, max));
-    }
-
-    async findIdsRangeBy(
-        key: keyof T,
-        min: number | Date,
-        max: number | Date
-    ): Promise<(number | string)[]> {
         if (!this.schema[key].index) throw new Error(`${key} is not indexed`);
         if (this.schema[key].type === 'string') {
             throw new Error('string findRange is not supported');
         }
         if (typeof min !== 'number') min = min.getTime();
         if (typeof max !== 'number') max = max.getTime();
-        return this.redis.zrangebyscore(this.getIndexKey(key), min, max);
+        return (await this.redis.zrangebyscore(
+            this.getIndexKey(key),
+            min,
+            max
+        )).map(this.parseJSON);
+    }
+
+    async findIdsRangeBy(
+        key: keyof T,
+        min: number | Date,
+        max: number | Date
+    ): Promise<IdType[]> {
+        return (await this.findRangeBy(key, min, max)).map(elem => elem.id!);
     }
 
     async findByFilter(filterName: string) {

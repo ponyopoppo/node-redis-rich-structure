@@ -6,7 +6,8 @@
   "license": "MIT",
   "dependencies": {
     "@types/ioredis": "^4.0.15",
-    "ioredis": "^4.14.0"
+    "ioredis": "^4.14.0",
+    "typescript": "^3.6.2"
   },
   "scripts": {
     "test": "ts-mocha test/index.ts",

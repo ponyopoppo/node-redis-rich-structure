@@ -277,8 +277,12 @@ describe('RedisRichStructure', () => {
     });
 });
 
-const BULK_NUM = 500;
-describe('performance', function() {
+const sleep = async (ms: number) =>
+    new Promise<void>(resolve => setTimeout(resolve, ms));
+
+const BULK_NUM = 100000;
+const LOOP_NUM = 100;
+describe('redis performance', function() {
     this.timeout(1000000);
     const redisCars = new RedisRichStructure<Car>(
         redis,
@@ -289,14 +293,8 @@ describe('performance', function() {
             weight: 0,
             createdAt: new Date(),
         },
-        ['id', 'type', 'weight', 'createdAt'],
-        {
-            filter2: {
-                orderKey: 'weight',
-                condition: (elem: Car) =>
-                    elem.type === 'hoge1' && !!elem.weight,
-            },
-        }
+        ['id', 'type', 'weight'],
+        {}
     );
 
     before(async () => {
@@ -315,81 +313,154 @@ describe('performance', function() {
         await redisCars.insertMany(cars);
     });
 
-    it('should insert one by one', async () => {
-        for (let i = 0; i < BULK_NUM; i++) {
-            await redisCars.insert({
-                type: `hoge-${rand(0, 10)}`,
-                weight: rand(100, 200),
-                createdAt: new Date(new Date().getTime() + rand(0, 100)),
-            });
+    it('find many by type', async () => {
+        for (let i = 0; i < LOOP_NUM; i++) {
+            await redisCars.findBy('type', `hoge-${rand(0, 10)}`);
         }
     });
 
-    it('find many', async () => {
-        for (let i = 0; i < BULK_NUM; i++) {
-            await redisCars.findBy('type', 'hoge-1');
-        }
-        for (let i = 0; i < BULK_NUM; i++) {
-            await redisCars.findBy('weight', 200);
+    it('find many by weight', async () => {
+        for (let i = 0; i < LOOP_NUM; i++) {
+            await redisCars.findBy('weight', 150);
         }
     });
 
     it('find ids many', async () => {
-        for (let i = 0; i < BULK_NUM; i++) {
-            await redisCars.findIdsBy('type', 'hoge1');
+        for (let i = 0; i < LOOP_NUM; i++) {
+            await redisCars.findIdsBy('type', `hoge-${rand(0, 10)}`);
         }
     });
 
-    it('should remove many', async () => {
-        const ids: number[] = [];
-        for (let i = 0; i < BULK_NUM; i += 2) {
-            ids.push(i);
-        }
-        await redisCars.removeMany(ids);
-    });
+    // it('should remove many', async () => {
+    //     const ids: number[] = [];
+    //     for (let i = 0; i < BULK_NUM; i += 2) {
+    //         ids.push(i);
+    //     }
+    //     await redisCars.removeMany(ids);
+    // });
 });
 
-describe('mysql', () => {
+describe('mysql performance', function() {
+    this.timeout(1000000);
     let connection: mysql.Connection;
     before(async () => {
         connection = await mysql.createConnection({
             host: 'localhost',
             user: 'root',
             password: '',
+        });
+        await connection.query('CREATE DATABASE IF NOT EXISTS redis_bench_db');
+        await connection.end();
+        connection = await mysql.createConnection({
+            host: 'localhost',
+            user: 'root',
+            password: '',
             database: 'redis_bench_db',
         });
+        await connection.query('DROP TABLE IF EXISTS car');
+        await connection.query(
+            'CREATE TABLE car (id int, type varchar(16), weight int, createdAt timestamp)'
+        );
+        await connection.query('ALTER TABLE car ADD INDEX idx_type(type)');
+        await connection.query('ALTER TABLE car ADD INDEX idx_weight(weight)');
     });
     it('should insert many', async () => {
-        for (let i = 0; i < BULK_NUM; i++) {
-            const type = `hoge-${rand(0, 10)}`;
-            const weight = rand(100, 200);
-            const createdAt = new Date(new Date().getTime() + rand(0, 100));
-            await connection.query(
-                'INSERT INTO car (id, type, weight, createdAt) VALUES (?, ?, ?, ?)',
-                [i, type, weight, createdAt]
+        let cars: Car[] = [];
+        const insert = async (chunk: Car[]) =>
+            connection.query(
+                'INSERT INTO car (id, type, weight, createdAt) VALUES ' +
+                    chunk.map(_ => ' (?, ?, ?, ?)').join(','),
+                ([] as any[]).concat(
+                    _.flatten(
+                        chunk.map(car => [
+                            car.id,
+                            car.type,
+                            car.weight,
+                            car.createdAt,
+                        ])
+                    )
+                )
             );
-            // console.log({ ret });
-        }
-    }).timeout(10000);
-
-    it('find many', async () => {
         for (let i = 0; i < BULK_NUM; i++) {
+            cars.push({
+                id: i,
+                type: `hoge-${rand(0, 10)}`,
+                weight: rand(100, 200),
+                createdAt: new Date(new Date().getTime() + rand(0, 100)),
+            });
+            if (cars.length > 200) {
+                await insert(cars);
+                cars = [];
+            }
+        }
+        await insert(cars);
+    });
+
+    it('find many by type', async () => {
+        for (let i = 0; i < LOOP_NUM; i++) {
             await connection.query('SELECT * FROM car WHERE type = ?', [
-                'hoge-1',
+                `hoge-${rand(0, 10)}`,
             ]);
         }
-        for (let i = 0; i < BULK_NUM; i++) {
-            await connection.query('SELECT * FROM car WHERE weight = ?', [200]);
+    });
+
+    it('find many by weight', async () => {
+        for (let i = 0; i < LOOP_NUM; i++) {
+            await connection.query('SELECT * FROM car WHERE weight = ?', [150]);
         }
-    }).timeout(10000);
+        // await Promise.all(
+        //     new Array(LOOP_NUM)
+        //         .fill(0)
+        //         .map(_ =>
+        //             connection.query('SELECT * FROM car WHERE weight = ?', [
+        //                 150,
+        //             ])
+        //         )
+        // );
+    });
 
     it('find ids many', async () => {
-        for (let i = 0; i < BULK_NUM; i++) {
+        for (let i = 0; i < LOOP_NUM; i++) {
             await connection.query('SELECT id FROM car WHERE type = ?', [
                 'hoge-1',
             ]);
         }
     }).timeout(10000);
+});
+
+describe('onmemory performance', function() {
+    this.timeout(1000000);
+    let cars: Car[] = [];
+
+    it('should insert many', async () => {
+        for (let i = 0; i < BULK_NUM; i++) {
+            const id = i;
+            const type = `hoge-${rand(0, 10)}`;
+            const weight = rand(100, 200);
+            const createdAt = new Date(new Date().getTime() + rand(0, 100));
+            cars.push({ id, type, weight, createdAt });
+        }
+    });
+
+    it('find many by type', async () => {
+        for (let i = 0; i < LOOP_NUM; i++) {
+            cars.filter(car => car.type === `hoge-${rand(0, 10)}`);
+        }
+    });
+
+    it('find many by weight', async () => {
+        for (let i = 0; i < LOOP_NUM; i++) {
+            cars.filter(car => car.weight === 150);
+        }
+    });
+
+    it('find ids many', async () => {
+        for (let i = 0; i < LOOP_NUM; i++) {
+            cars.filter(car => car.type === `hoge-${rand(0, 10)}`).map(
+                car => car.id
+            );
+        }
+    });
 });
 
 function rand(min: number, max: number) {
